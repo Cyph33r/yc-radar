@@ -1,42 +1,73 @@
-# YC Launch Monitor - Slack Bot
+# YC Radar — YC Launch Monitor Slack Bot
 
-Continuously monitors four sources — the YC Directory, the YC Speedrun
-page, X/Twitter, and LinkedIn — and posts a Slack alert the moment a new
-YC/Speedrun company or an early founder self-announcement is detected.
-State is kept in a local SQLite file so restarts never re-alert on
-something already seen.
+A personal Slack bot that continuously monitors four sources for new
+Y Combinator and YC Speedrun company launches, and fires a real-time
+alert into Slack the moment one is detected — including founder
+self-announcements that land *before* YC's own official post.
 
-## How it works
+Built for GTM, sales, and BD professionals who want to be first in a
+new YC company's inbox, not the fifth "congrats on launching" email
+that week.
 
-- `main.py` runs a poll cycle immediately on startup, then every
-  `POLL_INTERVAL_HOURS` (default 8) via APScheduler.
-- Each source in `sources/` returns only *new* items — checked against
-  `state.db` (see `db.py`) before anything is reported.
-- `slack_alerts.py` posts one of two message formats: a confirmed-company
-  alert or an early-signal alert (founder posted before YC announced).
-- `pond_agent.py` is a no-op until you register the bot with Pond and
-  fill in the agent credentials — after that it sends a heartbeat at the
-  end of every poll cycle.
+## What it monitors
 
-**Important — before this is production-ready:**
-- **YC Directory / Speedrun** (`sources/yc_directory.py`,
-  `sources/yc_speedrun.py`) scrape the live pages with Playwright.
-  Their selectors are written from the page's current general structure
-  and *will* need a quick check/adjustment against the live DOM — open
-  the page, inspect a company card, and confirm the selectors still
-  match before your first real run.
-- **X and LinkedIn** (`sources/x_source.py`,
-  `sources/linkedin_source.py`) call a third-party scraping actor via
-  [Apify](https://apify.com). You need to pick specific actors from the
-  Apify Store (see step 4 below) and match the field names in those two
-  files to that actor's actual output — the ones here are written for a
-  typical actor's schema as a starting point, not a guarantee.
-- Using third-party scrapers for X and LinkedIn sits outside those
-  platforms' official APIs and terms of service — that's the tradeoff of
-  getting real-time coverage without official (and in X's case, costly)
-  API access. Worth being upfront about this in your task submission.
+- **YC Directory** (`ycombinator.com/companies`) — the source of truth for confirming a real YC/Speedrun company; scraped for newly added companies and batch listings
+- **YC Speedrun page** — tracked separately from the main directory and tagged accordingly, since it's a distinct subprogram
+- **X (Twitter)** — detects founder launch posts mentioning YC/Speedrun keywords ("YC S26", "Speedrun batch", "backed by Y Combinator") *before* YC has made it official
+- **LinkedIn** — detects founder posts and company pages referencing YC or Speedrun
 
-## Setup
+Every alert is deduplicated against a persistent SQLite store, so the
+bot never re-alerts on something it's already posted — including across
+restarts and redeploys.
+
+## Architecture
+
+```
+poller.py          — shared poll-cycle logic (the actual source-checking work)
+main.py             — standalone entrypoint for local testing/dev
+pond_server.py      — production entrypoint; FastAPI server implementing
+                      Pond Protocol V1, which also runs the same recurring
+                      poll schedule in the background
+config.py           — loads and validates all environment variables
+db.py               — SQLite-backed dedup state (seen_items table)
+slack_alerts.py     — formats and posts both alert shapes via slack_sdk
+pond_agent.py        — heartbeat helper (legacy placeholder; superseded by
+                      pond_server.py's /runs + /tasks flow in practice)
+sources/
+  yc_directory.py    — YC main directory scraper (Playwright)
+  yc_speedrun.py      — YC Speedrun page scraper (Playwright)
+  x_source.py          — X/Twitter early signals (Apify)
+  linkedin_source.py   — LinkedIn early signals (Apify)
+```
+
+`main.py` and `pond_server.py` both call the same `poller.run_poll_cycle()`
+— nothing is duplicated between the local-testing path and the production
+deployment.
+
+## Known limitations (documented, not hidden)
+
+- **YC Directory / Speedrun scrapers** use Playwright against the live,
+  JS-rendered pages. Selectors were written from the site's general
+  structure and may need periodic re-checking against the live DOM if
+  YC changes their markup.
+- **X source** uses the Apify actor
+  `kaitoeasyapi~twitter-x-data-tweet-scraper-pay-per-result-cheapest`,
+  called with a constructed search URL per search term. Company name and
+  batch are extracted from raw tweet text via regex heuristics
+  (`_extract_company_name` / `_extract_batch` in `x_source.py`) since the
+  actor doesn't return a dedicated company field — reliable on typical
+  "Company (YC S26)" phrasing, not guaranteed on every tweet.
+- **LinkedIn source** uses the Apify actor `apimaestro~linkedin-posts-search`.
+  Genuine open-keyword search across all of LinkedIn is much rarer than on
+  X — most LinkedIn actors only scrape a *known* profile or company page's
+  posts. This is the closest available option for open search, but
+  coverage may be less complete than X's.
+- Using third-party Apify scrapers for X and LinkedIn sits outside those
+  platforms' official APIs and terms of service. That's the deliberate
+  tradeoff for real-time coverage without official API costs (X's search
+  API alone runs ~$200+/month) — worth being upfront about.
+
+## Local setup
 
 ### 1. Install dependencies
 
@@ -44,31 +75,29 @@ something already seen.
 python3 -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-playwright install chromium
+python -m playwright install chromium
 ```
 
 ### 2. Create the Slack app
 
-1. Go to https://api.slack.com/apps → "Create New App" → "From scratch".
-2. Under **OAuth & Permissions**, add the `chat:write` Bot Token Scope.
-3. Click **Install to Workspace**, approve, then copy the **Bot User
-   OAuth Token** (starts with `xoxb-`).
-4. Invite the bot to your target channel (`/invite @YourBotName`), or
-   note the user ID if you want DMs instead.
-5. Get the channel ID: right-click the channel in Slack → **View channel
-   details** → copy the ID at the bottom.
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From scratch**
+2. Name it, select your workspace
+3. Under **OAuth & Permissions** → **Scopes** → **Bot Token Scopes**, add `chat:write`
+4. Click **Install to Workspace**, approve
+5. Copy the **Bot User OAuth Token** (starts with `xoxb-`) → this is `SLACK_BOT_TOKEN`
+6. In Slack, invite the bot to your target channel: `/invite @YourBotName`
+7. Get the channel ID: right-click the channel → **View channel details** → copy the ID at the bottom (starts with `C`) → this is `SLACK_CHANNEL_ID`
 
 ### 3. Set up Apify
 
-1. Sign up at https://apify.com and grab your API token from
-   **Settings → Integrations**.
-2. In the Apify Store, search for an X/Twitter search scraper and a
-   LinkedIn posts/company scraper. Test each one manually in the Apify
-   console first with a sample search term so you know its exact input
-   and output fields.
-3. Update `sources/x_source.py` and `sources/linkedin_source.py` so the
-   `run_input` dict and the `raw.get(...)` field names match what you
-   tested.
+1. Sign up at [apify.com](https://apify.com), grab your **API token** from **Settings → Integrations** → this is `APIFY_API_TOKEN`
+2. Search the Apify Store for an X/Twitter search actor and a LinkedIn posts search actor
+3. **Test each one manually** in the Apify console with a real search term before wiring it in — check the exact input field names and output shape, since these vary by actor
+4. Copy each actor's ID from its store page URL (`apify.com/username/actor-name` → ID is `username/actor-name`, use `~` instead of `/` when calling the API)
+
+This project currently uses:
+- X: `kaitoeasyapi~twitter-x-data-tweet-scraper-pay-per-result-cheapest`
+- LinkedIn: `apimaestro~linkedin-posts-search`
 
 ### 4. Configure environment variables
 
@@ -76,79 +105,178 @@ playwright install chromium
 cp .env.example .env
 ```
 
-Fill in `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_ID`, `APIFY_API_TOKEN`,
-`APIFY_X_ACTOR_ID`, `APIFY_LINKEDIN_ACTOR_ID`, and the search terms.
+Fill in real values for:
+```
+SLACK_BOT_TOKEN
+SLACK_CHANNEL_ID
+APIFY_API_TOKEN
+APIFY_X_ACTOR_ID
+APIFY_LINKEDIN_ACTOR_ID
+X_SEARCH_TERMS
+LINKEDIN_SEARCH_TERMS
+```
 
-### 5. Register with Pond's agent infrastructure
+`POND_AGENT_ID`, `POND_AGENT_API_KEY`, and `POND_ACCESS_KEY` can stay
+blank for local testing — only required once the agent is registered
+with Pond (see below).
 
-Go to https://joinpond.ai/agent/create, register this bot, and copy the
-resulting credentials into `POND_AGENT_ID` / `POND_AGENT_API_KEY` in
-`.env`. Until this is filled in, the bot runs standalone with no
-heartbeat calls — that's fine for local testing.
-
-### 6. Run it
+### 5. Run it locally
 
 ```bash
 python main.py
 ```
 
-This runs a poll cycle immediately, then keeps running and polls every
-8 hours (configurable). Leave the terminal open, or see below for
-running it persistently.
+Runs one poll cycle immediately, then keeps polling every
+`POLL_INTERVAL_HOURS` (default 8).
 
-### 7. Run it persistently (pick one)
+### 6. Test each piece individually
 
-**systemd (Linux server):**
+```bash
+# Slack connection
+python3 -c "from slack_alerts import client; from config import config; client.chat_postMessage(channel=config.SLACK_CHANNEL_ID, text='test alert')"
+
+# YC Directory scraper
+python3 -c "from sources.yc_directory import fetch_companies; print(fetch_companies()[:5])"
+
+# X source (bypasses dedup so you always see results)
+python3 -c "from sources.x_source import get_new_signals; print(get_new_signals(lambda x: False)[:3])"
+
+# LinkedIn source
+python3 -c "from sources.linkedin_source import get_new_signals; print(get_new_signals(lambda x: False)[:3])"
+```
+
+Delete `state.db` between test runs if you want to re-trigger alerts
+for items already marked seen.
+
+## Deployment (Render.com)
+
+1. Push this repo to GitHub
+2. On [render.com](https://render.com): **New → Web Service** → connect this repo
+3. **Build Command:**
+   ```
+   pip install -r requirements.txt && python -m playwright install chromium
+   ```
+   *(Do not add `--with-deps` — it tries to `apt-get install` system packages as root via `su`, which Render's build environment doesn't allow and will fail the build.)*
+4. **Start Command:**
+   ```
+   uvicorn pond_server:app --host 0.0.0.0 --port $PORT
+   ```
+5. **Environment** tab — add every variable from `.env.example` with real values, plus:
+   ```
+   PYTHON_VERSION=3.12.7
+   POND_ACCESS_KEY=<generated by Pond when you list the agent>
+   ```
+6. Deploy. Render gives you a public HTTPS URL like `https://yc-radar.onrender.com`
+
+Render's free tier spins down after inactivity — the first request
+after idle time may take 30–60 seconds while it wakes up.
+
+### Deployment troubleshooting (real issues hit building this)
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `error: failed-wheel-build-for-install` / greenlet compile errors | Render defaulted to a too-new Python (3.14) that Playwright's `greenlet` dependency can't build against | Set `PYTHON_VERSION=3.12.7` as an environment variable (not `runtime.txt` — Render doesn't reliably read that) |
+| `su: Authentication failure` / `Failed to install browsers` | `playwright install --with-deps` tries to install OS packages as root | Drop `--with-deps`, use plain `python -m playwright install chromium` |
+| `Missing required env var: SLACK_BOT_TOKEN` at runtime | Render env vars are separate from Codespaces secrets — nothing carries over automatically | Re-add every variable in Render's own **Environment** tab |
+| `ModuleNotFoundError` / wrong app fails to start | Start command pointed at the wrong file (`pond_agent:app` instead of `pond_server:app`) | Confirm Start Command is exactly `uvicorn pond_server:app --host 0.0.0.0 --port $PORT` |
+| Apify calls return `404 Client Error: Not Found` | Actor ID env var had a `/` instead of `~`, and/or a trailing newline from copy-paste | `config.py`'s `_require()` strips whitespace; each source file also normalizes `/` → `~` before building the request URL |
+
+## Pond Protocol V1 integration
+
+`pond_server.py` implements the three endpoints required by
+[Pond's Agent spec](https://docs.joinpond.ai/docs/build-and-publish-an-agent-on-pond-full):
+
+| Endpoint | Auth required | Purpose |
+|---|---|---|
+| `GET /manifest` | No | Public — describes the agent's capabilities, always available without a key |
+| `POST /runs` | Yes | Triggers a poll cycle; always returns `202` with a `task_id`, since a real poll cycle (scraping + API calls) is never instant |
+| `GET /tasks/{task_id}` | Yes | Poll for a run's status and, once `completed`, its result |
+
+**Auth:** every `/runs` and `/tasks` request must include:
+```
+Authorization: Bearer <POND_ACCESS_KEY>
+X-Agent-Protocol-Version: 1.0
+```
+`/manifest` requires neither header.
+
+**Idempotency:** Pond sends `Idempotency-Key: <run_id>` and may resend the
+same `run_id` on retry — `pond_server.py` keys its task store by `run_id`
+itself, so a duplicate request naturally returns the same task instead of
+starting a second poll cycle.
+
+**Usage reporting:** every completed/failed task response includes
+`usage: {unit_of_measurement: "result", quantity: <alert count>}`, matching
+the `result`-based pricing plan configured on the Pond listing.
+
+### Testing the Pond endpoints directly
+
+```bash
+curl https://yc-radar.onrender.com/manifest
+
+curl -i -X POST https://yc-radar.onrender.com/runs \
+  -H "Authorization: Bearer YOUR_POND_ACCESS_KEY" \
+  -H "X-Agent-Protocol-Version: 1.0" \
+  -H "Content-Type: application/json" \
+  -d '{"run_id":"test123","agent_id":"agt_test","conversation_id":"chat_test","history_truncated":false,"user":{"id":"usr_test","locale":"en-US","timezone":"America/Los_Angeles"},"messages":[{"id":"msg_test","role":"user","created_at":"2026-08-29T10:00:00Z","parts":[{"type":"text","text":"Run a poll cycle."}]}],"parameters":{},"execution":{"accepted_output_modes":["text/markdown"],"deadline_ms":300000}}'
+
+curl -H "Authorization: Bearer YOUR_POND_ACCESS_KEY" -H "X-Agent-Protocol-Version: 1.0" \
+  https://yc-radar.onrender.com/tasks/test123
+```
+
+Expect: `/manifest` returns the capabilities JSON immediately; `/runs`
+returns `{"run_id":"test123","task_id":"test123","status":"queued",...}`;
+polling `/tasks/test123` a few times moves through `queued` → `running` →
+`completed`, with a final `output` and `usage` block.
+
+## Alternative: running persistently without Render
+
+If you'd rather self-host on your own server instead of Render:
+
+**systemd (Linux):**
 ```ini
-# /etc/systemd/system/yc-monitor.service
 [Unit]
-Description=YC Launch Monitor
+Description=YC Radar
 After=network.target
 
 [Service]
-WorkingDirectory=/path/to/yc-launch-monitor
-ExecStart=/path/to/yc-launch-monitor/venv/bin/python main.py
+WorkingDirectory=/path/to/yc-radar
+ExecStart=/path/to/yc-radar/venv/bin/python main.py
 Restart=always
-EnvironmentFile=/path/to/yc-launch-monitor/.env
+EnvironmentFile=/path/to/yc-radar/.env
 
 [Install]
 WantedBy=multi-user.target
 ```
-Then: `sudo systemctl enable --now yc-monitor`
+`sudo systemctl enable --now yc-radar`
 
-**pm2 (simplest, cross-platform):**
+**pm2:**
 ```bash
 npm install -g pm2
-pm2 start "venv/bin/python main.py" --name yc-monitor
+pm2 start "venv/bin/python main.py" --name yc-radar
 pm2 save
 ```
 
-**Docker:** wrap the same `python main.py` command in a container with a
-`restart: always` policy if you'd rather containerize it.
-
-## Testing before your first real submission
-
-- Temporarily lower `POLL_INTERVAL_HOURS` to a small value and confirm a
-  test alert lands in Slack.
-- Delete `state.db` between test runs if you want to re-trigger alerts
-  for items already seen.
-- Record your screen (or take screenshots) showing a real alert posting
-  in Slack — this is a required deliverable.
+Note: these run `main.py`, the standalone poller — not
+`pond_server.py` — so they won't expose the Pond-compatible HTTP
+endpoints, only the independent Slack-alerting loop.
 
 ## Project structure
 
 ```
-yc-launch-monitor/
-├── main.py                 # orchestrator / scheduler
-├── config.py                # env var loading
+yc-radar/
+├── main.py                   # standalone entrypoint (local/self-hosted)
+├── pond_server.py            # Pond Protocol V1 server (Render deployment)
+├── poller.py                 # shared poll-cycle logic
+├── config.py                 # env var loading + validation
 ├── db.py                     # SQLite dedup state
 ├── slack_alerts.py           # Slack message formatting + posting
-├── pond_agent.py             # Pond heartbeat integration
+├── pond_agent.py             # heartbeat helper (legacy/placeholder)
 ├── sources/
 │   ├── yc_directory.py       # YC main directory scraper (Playwright)
 │   ├── yc_speedrun.py        # YC Speedrun page scraper (Playwright)
 │   ├── x_source.py           # X/Twitter early signals (Apify)
 │   └── linkedin_source.py    # LinkedIn early signals (Apify)
+├── runtime.txt                # Python version hint (Render prefers the env var instead)
 ├── requirements.txt
 └── .env.example
 ```
@@ -157,5 +285,8 @@ yc-launch-monitor/
 
 Adding a new source is a matter of adding one more `sources/*.py` module
 that implements a `get_new_*(is_seen_fn) -> list[dict]` function, then
-registering it in the loop in `main.py` — the dedup, Slack formatting,
-and scheduling layers don't need to change.
+registering it inside `poller.py`'s `run_poll_cycle()`. The dedup layer,
+Slack formatting, local scheduler, and Pond protocol server don't need
+any changes — this is the mechanism the original task's "future
+upgradability" requirement (e.g. adding more social platforms later) is
+built around.
