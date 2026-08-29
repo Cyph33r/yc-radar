@@ -4,8 +4,10 @@ import threading
 from datetime import datetime, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI, Header, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from config import config
 from db import init_db
@@ -16,44 +18,16 @@ log = logging.getLogger("yc-launch-monitor")
 
 app = FastAPI(title="YC Radar Agent")
 
-AGENT_VERSION = "2026.08.29"
-PROTOCOL_VERSION = "1.0"
-
-# run_id -> task record. Keyed by run_id itself (not a separately generated
-# ID), so a duplicate /runs call with the same Idempotency-Key naturally
-# returns the same task instead of starting a second poll cycle.
 _tasks: dict = {}
 _tasks_lock = threading.Lock()
-
-
-def _error(code: str, message: str, status: int):
-    return JSONResponse(status_code=status, content={"error": {"code": code, "message": message}})
-
-
-def _check_protocol_version(v):
-    if not v:
-        return _error("invalid_request", "Missing X-Agent-Protocol-Version header.", 400)
-    if not re.fullmatch(r"\d+\.\d+", v):
-        return _error("invalid_request", "X-Agent-Protocol-Version must be Major.Minor, e.g. 1.0.", 400)
-    if v != PROTOCOL_VERSION:
-        return _error("unsupported_protocol_version", f"Unsupported protocol version {v}.", 400)
-    return None
-
-
-def _check_auth(authorization):
-    if not config.POND_ACCESS_KEY:
-        return None  # not configured yet — allow through for local testing
-    if authorization != f"Bearer {config.POND_ACCESS_KEY}":
-        return _error("unauthorized", "Missing or invalid Access Key.", 401)
-    return None
 
 
 @app.get("/manifest")
 def manifest():
     return {
         "protocol": "marketplace-agent",
-        "protocol_version": PROTOCOL_VERSION,
-        "agent_version": AGENT_VERSION,
+        "protocol_version": "1.0",
+        "agent_version": "2026.08.29",
         "metadata": {
             "name": "YC Radar",
             "short_description": "Catches new YC and Speedrun company launches — including founder self-announcements before YC's official post — and pushes real-time alerts to Slack.",
@@ -72,11 +46,52 @@ def manifest():
         "input_modes": ["text/plain"],
         "output_modes": ["text/markdown"],
         "limits": {
-            "max_request_bytes": 1048576,
-            "max_attachment_bytes": 1048576,
+            "max_request_bytes": 1_048_576,
+            "max_attachment_bytes": 1_048_576,
             "max_run_seconds": 300,
         },
     }
+
+
+class RunRequest(BaseModel):
+    run_id: str
+    agent_id: str
+    conversation_id: str
+    history_truncated: bool
+    action_id: str | None = None
+    user: dict
+    messages: list[dict]
+    parameters: dict
+    execution: dict
+
+
+def authenticate_pond(
+    authorization: str | None = Header(default=None),
+    pond_version: str | None = Header(default=None, alias="X-Agent-Protocol-Version"),
+):
+    if authorization != f"Bearer {config.POND_ACCESS_KEY}":
+        fail(401, "unauthorized", "The Access Key is missing or invalid.")
+    if pond_version is None or re.fullmatch(r"\d+\.\d+", pond_version) is None:
+        fail(400, "invalid_request", "The protocol version must be Major.Minor.")
+    if pond_version != "1.0":
+        fail(400, "unsupported_protocol_version", f"Protocol version {pond_version} is not supported.")
+
+
+def fail(status_code: int, code: str, message: str):
+    raise HTTPException(status_code=status_code, detail={"code": code, "message": message})
+
+
+@app.exception_handler(HTTPException)
+async def pond_error(_request: Request, error: HTTPException):
+    return JSONResponse(status_code=error.status_code, content={"error": error.detail})
+
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(_request: Request, _error: RequestValidationError):
+    return JSONResponse(
+        status_code=400,
+        content={"error": {"code": "invalid_request", "message": "The request does not match Pond Protocol V1."}},
+    )
 
 
 def _execute_run(run_id: str):
@@ -109,66 +124,34 @@ def _execute_run(run_id: str):
             )
 
 
-@app.post("/runs", status_code=202)
-async def create_run(
-    request: Request,
-    authorization: str = Header(default=None),
-    x_agent_protocol_version: str = Header(default=None, alias="X-Agent-Protocol-Version"),
-):
-    version_error = _check_protocol_version(x_agent_protocol_version)
-    if version_error:
-        return version_error
-    auth_error = _check_auth(authorization)
-    if auth_error:
-        return auth_error
-
-    content_type = request.headers.get("content-type", "")
-    if "application/json" not in content_type:
-        return _error("unsupported_content_type", "Content-Type must be application/json.", 415)
-
-    try:
-        body = await request.json()
-    except Exception:
-        return _error("invalid_request", "Malformed JSON body.", 400)
-
-    run_id = body.get("run_id")
-    if not run_id:
-        return _error("invalid_request", "run_id is required.", 400)
+@app.post("/runs", status_code=202, dependencies=[Depends(authenticate_pond)])
+async def create_run(run: RunRequest, idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
+    if idempotency_key != run.run_id:
+        fail(400, "invalid_request", "Idempotency-Key must match run_id.")
 
     with _tasks_lock:
-        existing = _tasks.get(run_id)
+        existing = _tasks.get(run.run_id)
         if existing:
             return JSONResponse(
                 status_code=202,
-                content={"run_id": run_id, "task_id": run_id, "status": existing["status"], "poll_after_ms": 2000},
+                content={"run_id": run.run_id, "task_id": run.run_id, "status": existing["status"], "poll_after_ms": 2000},
             )
-        _tasks[run_id] = {"status": "queued", "created_at": datetime.now(timezone.utc).isoformat()}
+        _tasks[run.run_id] = {"status": "queued", "created_at": datetime.now(timezone.utc).isoformat()}
 
-    threading.Thread(target=_execute_run, args=(run_id,), daemon=True).start()
+    threading.Thread(target=_execute_run, args=(run.run_id,), daemon=True).start()
 
     return JSONResponse(
         status_code=202,
-        content={"run_id": run_id, "task_id": run_id, "status": "queued", "poll_after_ms": 2000},
+        content={"run_id": run.run_id, "task_id": run.run_id, "status": "queued", "poll_after_ms": 2000},
     )
 
 
-@app.get("/tasks/{task_id}")
-def get_task(
-    task_id: str,
-    authorization: str = Header(default=None),
-    x_agent_protocol_version: str = Header(default=None, alias="X-Agent-Protocol-Version"),
-):
-    version_error = _check_protocol_version(x_agent_protocol_version)
-    if version_error:
-        return version_error
-    auth_error = _check_auth(authorization)
-    if auth_error:
-        return auth_error
-
+@app.get("/tasks/{task_id}", dependencies=[Depends(authenticate_pond)])
+def get_task(task_id: str):
     with _tasks_lock:
         task = _tasks.get(task_id)
     if not task:
-        return _error("task_not_found", "Unknown task_id.", 404)
+        fail(404, "task_not_found", "Unknown task_id.")
 
     response = {"run_id": task_id, "task_id": task_id, "status": task["status"]}
     if task["status"] == "completed":
