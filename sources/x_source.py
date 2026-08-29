@@ -27,7 +27,9 @@ def fetch_recent_posts() -> list[dict]:
     that actor's documented input schema (most X/search actors accept
     something like `searchTerms` and a result-count cap).
     """
-    url = APIFY_RUN_SYNC_URL.format(actor_id=config.APIFY_X_ACTOR_ID)
+    actor_id = config.APIFY_X_ACTOR_ID.strip().replace("/", "~")
+    url = APIFY_RUN_SYNC_URL.format(actor_id=actor_id)
+
     run_input = {
         "searchTerms": config.X_SEARCH_TERMS,
         "maxItems": 100,

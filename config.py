@@ -16,7 +16,7 @@ def _require(name: str) -> str:
             f"Missing required env var: {name}. Copy .env.example to .env "
             f"and fill it in."
         )
-    return value
+    return value.strip()
 
 
 def _split_terms(name: str) -> list[str]:
