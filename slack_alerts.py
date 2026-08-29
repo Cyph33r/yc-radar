@@ -2,12 +2,12 @@
 Posts formatted alerts to Slack via the Bolt SDK's WebClient.
 Every alert follows the two shapes from the task's Example Deliverables.
 """
-from slack_bolt import App
+
+from slack_sdk import WebClient
 
 from config import config
 
-app = App(token=config.SLACK_BOT_TOKEN)
-client = app.client
+client = WebClient(token=config.SLACK_BOT_TOKEN)
 
 
 def post_confirmed_alert(item: dict) -> None:
