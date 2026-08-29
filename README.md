@@ -1,4 +1,4 @@
-# YC Launch Monitor — Slack Bot
+# YC Launch Monitor - Slack Bot
 
 Continuously monitors four sources — the YC Directory, the YC Speedrun
 page, X/Twitter, and LinkedIn — and posts a Slack alert the moment a new
