@@ -35,6 +35,9 @@ class Config:
     X_SEARCH_TERMS = _split_terms("X_SEARCH_TERMS")
     APIFY_LINKEDIN_ACTOR_ID = _require("APIFY_LINKEDIN_ACTOR_ID")
     LINKEDIN_SEARCH_TERMS = _split_terms("LINKEDIN_SEARCH_TERMS")
+    
+    #pond
+    POND_ACCESS_KEY = os.environ.get("POND_ACCESS_KEY", "")
 
     # Polling
     POLL_INTERVAL_HOURS = float(os.environ.get("POLL_INTERVAL_HOURS", "8"))
