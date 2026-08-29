@@ -15,6 +15,25 @@ from datetime import datetime, timezone
 import requests
 
 from config import config
+import re
+
+def _extract_company_name(text: str) -> str:
+    if not text:
+        return "Unknown"
+    m = re.search(r'@(\w+)\s*\(\s*yc\b', text, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m = re.search(r'([A-Z][\w&.\-]{1,30})\s*\(\s*yc\b', text, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    return "Unknown"
+
+
+def _extract_batch(text: str) -> str:
+    if not text:
+        return ""
+    m = re.search(r'\b(yc\s*[sw]\d{2}|speedrun)\b', text, re.IGNORECASE)
+    return m.group(1).upper() if m else ""
 
 APIFY_RUN_SYNC_URL = (
     "https://api.apify.com/v2/acts/{actor_id}/run-sync-get-dataset-items"
@@ -66,7 +85,7 @@ def get_new_signals(is_seen_fn) -> list[dict]:
         new_items.append(
             {
                 "item_id": item_id,
-                "company_name": raw.get("company_name", "Unknown"),
+            "company_name": _extract_company_name(raw.get("text", "")),
                 "founder_name": raw.get("author", {}).get("name", "")
                 if isinstance(raw.get("author"), dict)
                 else raw.get("authorName", ""),
@@ -75,7 +94,7 @@ def get_new_signals(is_seen_fn) -> list[dict]:
                     if isinstance(raw.get("author"), dict)
                     else raw.get("authorHandle", "")
                 ),
-                "batch": "",
+                "batch": _extract_batch(raw.get("text", "")),
                 "source": "X",
                 "post_text": raw.get("text", ""),
                 "post_link": raw.get("url") or raw.get("twitterUrl", ""),
