@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: yc-radar
+    env: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt && python -m playwright install chromium"
+    startCommand: "uvicorn pond_server:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: POLL_INTERVAL_HOURS
+        value: 8
+      - key: DB_PATH
+        value: state.db
+      - key: SLACK_BOT_TOKEN
+        sync: false
+      - key: SLACK_CHANNEL_ID
+        sync: false
+      - key: APIFY_API_TOKEN
+        sync: false
+      - key: APIFY_X_ACTOR_ID
+        value: kaitoeasyapi~twitter-x-data-tweet-scraper-pay-per-result-cheapest
+      - key: APIFY_LINKEDIN_ACTOR_ID
+        value: apimaestro~linkedin-posts-search
+      - key: X_SEARCH_TERMS
+        value: "YC S26,backed by Y Combinator,Speedrun batch"
+      - key: LINKEDIN_SEARCH_TERMS
+        value: "YC S26,Y Combinator,Speedrun batch"
+      - key: POND_ACCESS_KEY
+        sync: false
