@@ -3,7 +3,10 @@ import traceback
 from datetime import datetime, timezone
 
 from db import is_seen, mark_seen
-import pond_agent
+try:
+    import pond_agent
+except ModuleNotFoundError:
+    pond_agent = None
 from slack_alerts import post_confirmed_alert, post_early_signal_alert
 from sources import yc_directory, yc_speedrun, x_source, linkedin_source
 
@@ -40,7 +43,8 @@ def run_poll_cycle() -> dict:
         except Exception:
             log.error(f"{label} poll failed:\n{traceback.format_exc()}")
 
-    pond_agent.send_heartbeat(status="ok", detail="poll cycle complete")
+    if pond_agent:
+        pond_agent.send_heartbeat(status="ok", detail="poll cycle complete")
     log.info("Poll cycle complete")
     return {
         "completed_at": datetime.now(timezone.utc).isoformat(),
