@@ -27,4 +27,4 @@ services:
       - key: LINKEDIN_SEARCH_TERMS
         value: "YC S26,Y Combinator,Speedrun batch"
       - key: POND_ACCESS_KEY
-        sync: false
+        value: 6PVf9vWPkBDT7nSZJSrsjt7m88EAu6Vt
