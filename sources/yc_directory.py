@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 
 from playwright.sync_api import sync_playwright
 
+from sources.browser import launch_browser
+
 DIRECTORY_URL = "https://www.ycombinator.com/companies"
 
 
@@ -25,7 +27,7 @@ def fetch_companies(max_scroll_rounds: int = 8) -> list[dict]:
     companies = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = launch_browser(p, headless=True)
         page = browser.new_page()
         page.goto(DIRECTORY_URL, wait_until="networkidle")
 

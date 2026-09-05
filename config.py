@@ -8,6 +8,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Default PLAYWRIGHT_BROWSERS_PATH to "0" on Render so browser binaries
+# are installed and looked up in the persistent virtual environment directory.
+if os.environ.get("RENDER") == "true" and "PLAYWRIGHT_BROWSERS_PATH" not in os.environ:
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
+
 
 def _require(name: str) -> str:
     value = os.environ.get(name)

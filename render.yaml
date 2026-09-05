@@ -9,6 +9,8 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.7
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
       - key: POLL_INTERVAL_HOURS
         value: 8
       - key: DB_PATH
