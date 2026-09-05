@@ -22,6 +22,18 @@ _tasks: dict = {}
 _tasks_lock = threading.Lock()
 
 
+# === Health check endpoints for Render ===
+
+@app.get("/")
+def root():
+    return {"status": "healthy", "service": "yc-radar"}
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
 # === Core Pond Protocol: public manifest ===
 
 @app.get("/manifest")
@@ -216,3 +228,12 @@ def _startup():
     scheduler.add_job(run_poll_cycle, "interval", hours=config.POLL_INTERVAL_HOURS)
     scheduler.start()
     log.info("Background scheduler started — next poll in %sh", config.POLL_INTERVAL_HOURS)
+
+
+if __name__ == "__main__":
+    import os
+    import uvicorn
+
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run("pond_server:app", host="0.0.0.0", port=port)
+

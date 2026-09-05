@@ -220,6 +220,7 @@ after idle time may take 30–60 seconds while it wakes up.
 | `su: Authentication failure` / `Failed to install browsers` | `playwright install --with-deps` tries to install OS packages as root | Drop `--with-deps`, use plain `python -m playwright install chromium` |
 | `Missing required env var: SLACK_BOT_TOKEN` at runtime | Render env vars are separate from Codespaces secrets — nothing carries over automatically | Re-add every variable in Render's own **Environment** tab |
 | `ModuleNotFoundError` / wrong app fails to start | Start command pointed at the wrong file | Confirm Start Command is exactly `uvicorn pond_server:app --host 0.0.0.0 --port $PORT` |
+| `Port scan timeout reached, no open ports detected` | Start command ran `python main.py` (which runs a blocking loop and never opens a port) or uvicorn omitted `--host 0.0.0.0` | In Render service **Settings → Start Command**, set to: `uvicorn pond_server:app --host 0.0.0.0 --port $PORT` |
 | Apify calls return `404 Client Error: Not Found` | Actor ID env var had a `/` instead of `~`, and/or a trailing newline from copy-paste | `config.py`'s `_require()` strips whitespace; each source file also normalizes `/` → `~` before building the request URL |
 
 ## Pond Protocol V1 integration

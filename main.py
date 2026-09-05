@@ -1,4 +1,5 @@
 import logging
+import os
 from apscheduler.schedulers.blocking import BlockingScheduler
 from config import config
 from db import init_db
@@ -19,4 +20,11 @@ def main():
         log.info("Shutting down")
 
 if __name__ == "__main__":
-    main()
+    if "PORT" in os.environ:
+        import uvicorn
+        port = int(os.environ["PORT"])
+        log.info(f"PORT={port} detected (Render web service environment). Starting pond_server on 0.0.0.0:{port}...")
+        uvicorn.run("pond_server:app", host="0.0.0.0", port=port)
+    else:
+        main()
+
