@@ -209,7 +209,10 @@ def get_task(task_id: str):
 @app.on_event("startup")
 def _startup():
     init_db()
+    # Run an immediate poll cycle on startup (matches main.py behavior)
+    threading.Thread(target=run_poll_cycle, daemon=True).start()
+    log.info("Initial poll cycle triggered")
     scheduler = BackgroundScheduler()
     scheduler.add_job(run_poll_cycle, "interval", hours=config.POLL_INTERVAL_HOURS)
     scheduler.start()
-    log.info("Background scheduler started")
+    log.info("Background scheduler started — next poll in %sh", config.POLL_INTERVAL_HOURS)
