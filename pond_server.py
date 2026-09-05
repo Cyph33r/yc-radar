@@ -22,19 +22,42 @@ _tasks: dict = {}
 _tasks_lock = threading.Lock()
 
 
+# === Core Pond Protocol: public manifest ===
+
 @app.get("/manifest")
 def manifest():
     return {
         "protocol": "marketplace-agent",
         "protocol_version": "1.0",
-        "agent_version": "2026.08.29",
+        "agent_version": "2026.09.05",
         "metadata": {
             "name": "YC Radar",
             "short_description": "Catches new YC and Speedrun company launches — including founder self-announcements before YC's official post — and pushes real-time alerts to Slack.",
             "description": "<p>Monitors the YC Directory, YC Speedrun, X, and LinkedIn for new company launches, including founder self-announcements before YC's own post, and posts real-time alerts to a Slack channel.</p>",
             "category": "sales",
+            "key_features": "<ul><li>YC Directory monitoring</li><li>YC Speedrun tracking</li><li>X (Twitter) social signal detection</li><li>LinkedIn post monitoring</li><li>Real-time Slack alerts</li></ul>",
+            "use_cases": "<p>Stay ahead of the curve by detecting new YC and Speedrun company launches before they're officially announced. Ideal for investors, recruiters, and founders tracking the YC ecosystem.</p>",
             "github_url": "https://github.com/Cyph33r/yc-radar",
         },
+        "actions": [
+            {
+                "id": "run_poll_cycle",
+                "name": "Run Poll Cycle",
+                "description": "Use when the user wants to trigger a poll cycle to check for new YC and Speedrun company launches across all monitored sources (YC Directory, YC Speedrun, X, LinkedIn) and send Slack alerts for any new findings.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": {
+                            "type": "string",
+                            "description": "An optional instruction or note for the poll cycle.",
+                            "minLength": 1,
+                        }
+                    },
+                    "required": [],
+                    "additionalProperties": False,
+                },
+            }
+        ],
         "capabilities": {
             "sync": False,
             "streaming": False,
@@ -53,6 +76,8 @@ def manifest():
     }
 
 
+# === Core Pond Protocol: run request model ===
+
 class RunRequest(BaseModel):
     run_id: str
     agent_id: str
@@ -65,6 +90,8 @@ class RunRequest(BaseModel):
     execution: dict
 
 
+# === Supporting function: runtime authentication ===
+
 def authenticate_pond(
     authorization: str | None = Header(default=None),
     pond_version: str | None = Header(default=None, alias="X-Agent-Protocol-Version"),
@@ -76,6 +103,8 @@ def authenticate_pond(
     if pond_version != "1.0":
         fail(400, "unsupported_protocol_version", f"Protocol version {pond_version} is not supported.")
 
+
+# === Supporting functions: Pond error responses ===
 
 def fail(status_code: int, code: str, message: str):
     raise HTTPException(status_code=status_code, detail={"code": code, "message": message})
@@ -93,6 +122,8 @@ async def invalid_request(_request: Request, _error: RequestValidationError):
         content={"error": {"code": "invalid_request", "message": "The request does not match Pond Protocol V1."}},
     )
 
+
+# === Agent logic: async task execution ===
 
 def _execute_run(run_id: str):
     with _tasks_lock:
@@ -124,11 +155,18 @@ def _execute_run(run_id: str):
             )
 
 
+# === Core Pond Protocol: run endpoint ===
+
 @app.post("/runs", status_code=202, dependencies=[Depends(authenticate_pond)])
 async def create_run(run: RunRequest, idempotency_key: str | None = Header(default=None, alias="Idempotency-Key")):
     if idempotency_key != run.run_id:
         fail(400, "invalid_request", "Idempotency-Key must match run_id.")
 
+    # Validate action_id — manifest declares actions, so action_id is required
+    if run.action_id != "run_poll_cycle":
+        fail(400, "unsupported_operation", "The action is not supported.")
+
+    # Idempotency: return existing task if already created
     with _tasks_lock:
         existing = _tasks.get(run.run_id)
         if existing:
@@ -136,7 +174,8 @@ async def create_run(run: RunRequest, idempotency_key: str | None = Header(defau
                 status_code=202,
                 content={"run_id": run.run_id, "task_id": run.run_id, "status": existing["status"], "poll_after_ms": 2000},
             )
-        _tasks[run.run_id] = {"status": "queued", "created_at": datetime.now(timezone.utc).isoformat()}
+        now = datetime.now(timezone.utc).isoformat()
+        _tasks[run.run_id] = {"status": "queued", "created_at": now, "updated_at": now}
 
     threading.Thread(target=_execute_run, args=(run.run_id,), daemon=True).start()
 
@@ -146,6 +185,8 @@ async def create_run(run: RunRequest, idempotency_key: str | None = Header(defau
     )
 
 
+# === Core Pond Protocol: task polling endpoint ===
+
 @app.get("/tasks/{task_id}", dependencies=[Depends(authenticate_pond)])
 def get_task(task_id: str):
     with _tasks_lock:
@@ -153,15 +194,17 @@ def get_task(task_id: str):
     if not task:
         fail(404, "task_not_found", "Unknown task_id.")
 
-    response = {"run_id": task_id, "task_id": task_id, "status": task["status"]}
+    response = {"run_id": task_id, "task_id": task_id, "status": task["status"], "updated_at": task.get("updated_at", task.get("created_at"))}
     if task["status"] == "completed":
-        response.update(output=task["output"], usage=task["usage"], updated_at=task["updated_at"])
+        response["output"] = task["output"]
+        response["usage"] = task["usage"]
     elif task["status"] == "failed":
-        response.update(error=task["error"], usage=task["usage"], updated_at=task["updated_at"])
-    elif task["status"] == "running":
-        response["updated_at"] = task.get("updated_at", task["created_at"])
+        response["error"] = task["error"]
+        response["usage"] = task["usage"]
     return response
 
+
+# === Application startup ===
 
 @app.on_event("startup")
 def _startup():
