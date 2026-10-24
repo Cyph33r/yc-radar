@@ -23,8 +23,8 @@ APIFY_RUN_SYNC_URL = (
 def fetch_recent_posts() -> list[dict]:
     url = APIFY_RUN_SYNC_URL.format(actor_id=config.APIFY_LINKEDIN_ACTOR_ID)
     run_input = {
-        "searchTerms": config.LINKEDIN_SEARCH_TERMS,
-        "maxItems": 50,
+        "keywords": config.LINKEDIN_SEARCH_TERMS,
+        "maxPostsPerKeyword": 50,
     }
     resp = requests.post(
         url,
@@ -51,7 +51,7 @@ def get_new_signals(is_seen_fn) -> list[dict]:
                 "item_id": item_id,
                 "company_name": raw.get("company_name", "Unknown"),
                 "founder_name": raw.get("authorName", ""),
-                "founder_handle": raw.get("authorProfileUrl", ""),
+                "founder_handle": raw.get("authorUrl") or raw.get("authorProfileUrl", ""),
                 "batch": "",
                 "source": "LinkedIn",
                 "post_text": raw.get("text", ""),
