@@ -24,7 +24,7 @@ services:
       - key: APIFY_X_ACTOR_ID
         value: kaitoeasyapi~twitter-x-data-tweet-scraper-pay-per-result-cheapest
       - key: APIFY_LINKEDIN_ACTOR_ID
-        value: apimaestro~linkedin-posts-search
+        value: johnvc~linkedin-post-search-api
       - key: X_SEARCH_TERMS
         value: "YC S26,backed by Y Combinator,Speedrun batch"
       - key: LINKEDIN_SEARCH_TERMS
