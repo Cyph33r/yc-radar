@@ -186,7 +186,7 @@ Currently used actors:
 | Platform | Actor |
 |---|---|
 | **X (Twitter)** | `kaitoeasyapi~twitter-x-data-tweet-scraper-pay-per-result-cheapest` |
-| **LinkedIn** | `apimaestro~linkedin-posts-search` |
+| **LinkedIn** | `johnvc~linkedin-post-search-api` |
 
 > **Tip:** If you swap actors, **test each one manually** in the Apify console first — input field names and output shape vary by actor.
 
